@@ -10,8 +10,13 @@ public class RedisRepository : IRedisRepository
     private readonly IDatabase _database;
     private readonly JsonSerializerOptions _jsonOptions;
     private readonly ILogger<RedisRepository> _logger;
+    private readonly IConfiguration _configuration;
+    private TimeSpan _weatherCacheDurationMinutes;
 
-    public RedisRepository(IConnectionMultiplexer redis, ILogger<RedisRepository> logger)
+    public RedisRepository(
+        IConnectionMultiplexer redis, 
+        ILogger<RedisRepository> logger,
+        IConfiguration configuration)
     {
         _database = redis.GetDatabase();
         _jsonOptions = new JsonSerializerOptions
@@ -20,6 +25,17 @@ public class RedisRepository : IRedisRepository
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase
         };
         _logger =  logger;
+        _configuration = configuration;
+        try
+        {
+            _weatherCacheDurationMinutes =
+                TimeSpan.FromMinutes(int.Parse(_configuration["CacheSettings:WeatherCacheDurationMinutes"]));
+        }
+        catch (Exception e)
+        {
+            _logger.LogError(e.Message);
+            _weatherCacheDurationMinutes = TimeSpan.FromMinutes(10);
+        }
     }
 
     private string GetKey(string location, string? data1 = null, string? data2 = null, string? unitGroup = null)
@@ -70,12 +86,12 @@ public class RedisRepository : IRedisRepository
 
             if (!await _database.KeyExistsAsync(key))
             {
-                await _database.StringSetAsync(key, JsonSerializer.Serialize(weather, _jsonOptions));
+                await _database.StringSetAsync(key, JsonSerializer.Serialize(weather, _jsonOptions), ttl ?? _weatherCacheDurationMinutes);
                 _logger.LogInformation($"CACHE: {key} was added");
             }
             else
             {
-                await _database.StringSetAsync(key, JsonSerializer.Serialize(weather, _jsonOptions));
+                await _database.StringSetAsync(key, JsonSerializer.Serialize(weather, _jsonOptions), ttl ?? _weatherCacheDurationMinutes);
                 _logger.LogInformation($"CACHE: {key} was replaced");
             }
         }
@@ -110,7 +126,7 @@ public class RedisRepository : IRedisRepository
         catch (RedisConnectionException ex)
         {
             _logger.LogError("REDIS CONNECTION FAILED: {Message}", ex.Message);
-            return false; // Возвращаем false, чтобы запросить данные из API
+            return false;
         }
     }
 }
